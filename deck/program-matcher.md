@@ -138,6 +138,27 @@ That is fine for seventeen programs written by the team that built the engine. I
 
 ---
 
+## ① The intake contract
+
+A program cannot publish while a required field is unapproved. The required set differs by category, because the categories genuinely differ in what they grant.
+
+| Field | All | CBI | RBI | Immigration |
+|---|:--:|:--:|:--:|:--:|
+| Category, country, outcome, authority, legal basis | ● | | | |
+| Cost floor + **currency** (never converted) | ● | | | |
+| Processing time · family inclusion · dependent age limits | ● | | | |
+| Restricted nationalities — **or an explicit *unknown*** | ● | | | |
+| Objective ratings (what the ranker scores) | ● | | | |
+| Qualifying routes and amounts | | ● | ● | |
+| Physical presence requirement | | | ● | |
+| Path to permanent residence / citizenship | | ● | ● | ● |
+| Route type and sponsor requirements | | | | ● |
+
+**A program with honest unknowns can still publish** — the card shows them, and the loop treats an unknown gate as *unverified*, never as *passed*.
+
+
+---
+
 ## ① Who does what
 
 | Step | Owner | Gate |
@@ -232,6 +253,23 @@ The nightly scan belongs with the other periodic scans in the notifications Beat
 
 ---
 
+## ③ The drift scan
+
+Nightly, seven assertions, reporting without repairing:
+
+1. Every active program has a current revision
+2. Every current revision is `published`
+3. Every published revision has a chunk per required section
+4. Every chunk's stored hash matches its content
+5. Every chunk has an embedding of the expected dimension
+6. No chunk belongs to a revision nothing references
+7. Every required Tier-1 field has an approval record
+
+**It does not self-heal.** Silent repair hides the fact that something wrote a state nothing should have written — and the next occurrence is then invisible too.
+
+
+---
+
 ## ③ The case nobody plans for: change mid-session
 
 An applicant is eight turns into a conversation when the program they are converging on publishes a new revision.
@@ -317,6 +355,25 @@ Turn 3 answer contradicts turn 1 ("residence for the family" then "I only travel
 
 ---
 
+## ④ Scenarios D and E — refusal, and the question back
+
+### D — The applicant declines to answer
+Budget is refused. The signal is marked **`refused`**, not left open — so it is never asked again. The loop continues on whatever still discriminates, and the shortlist ships with a stated caveat: *ranked without a budget; cost floors range from X to Y across these programs.*
+
+**A refused answer is information.** Re-asking it is how a conversation becomes an interrogation.
+
+### E — The applicant asks a question back
+> *"How long does the Portuguese one actually take?"*
+
+Answered **from retrieved chunks only**, with the source, then back to the selected question:
+
+> *"Around 12–18 months, and the source notes a backlog at the authority — that's from their August 2026 brief. On timing: is twelve months a hard constraint, or a preference?"*
+
+The applicant just handed over intent for free. The two failure modes are refusing to answer, and answering from the model's own knowledge.
+
+
+---
+
 ## ④ What the model does and does not do
 
 **Does:** run the conversation, extract signals from natural language, phrase the selected question, present the result in the right voice for the category.
@@ -370,6 +427,24 @@ The booking already carries program, plan and assignment for attribution. What c
 **No provider.** The program is still shown, marked as *not currently deliverable*, and routed to a consultant. Hiding a program because nobody has been assigned to it is how a good match disappears silently — the failure v1's provider-first catalog had by construction.
 
 **A provider-scoped funnel filters this layer.** It no longer decides what can be matched.
+
+---
+
+## ⑤ Ordering — the decision we need from you
+
+For a non-exclusive program with several providers, the order must be **stated**, not inherited from whatever the queryset returned.
+
+| Rule | For | Against |
+|---|---|---|
+| **Consultant rating** | Applicant-aligned, already collected | Thin data on new providers |
+| **Response time / capacity** | Predicts whether they are actually served | Punishes a good provider having a busy week |
+| **Commercial terms** | Aligns with revenue | Not applicant-aligned; must be disclosed if used |
+| **Round-robin** | Fair between providers, ungameable | Ignores fit entirely |
+
+**Recommendation:** rating first, capacity as tie-break, commercial terms handled in the commission layer rather than in the ordering.
+
+Whatever is chosen, **the ordering inputs are recorded on the presented result** — so an order can be explained months later. This blocks W5's final slice, not its start.
+
 
 ---
 
@@ -440,6 +515,23 @@ Roughly fifty applicant profiles labelled by a consultant with the program they 
 | Index-vs-catalog drift | unmeasured | 0 |
 
 "The chat feels more directed" is not a result.
+
+---
+
+## Where the detail lives
+
+This deck is the summary. Each flow has a full specification in the repository:
+
+| Doc | Contains |
+|---|---|
+| `docs/01-data-collection.md` | Source trust levels · intake state machine · extraction schema with source spans · required-field contract · language handling · catalog migration |
+| `docs/02-data-storage.md` | Three tiers with models and indexes · section taxonomy · the pre-filtered SQL · sizing · failure modes |
+| `docs/03-data-update.md` | Publish transaction · hash-diff reindex · seven drift assertions · session pinning and the rollback case · staleness |
+| `docs/04-client-questions.md` | The loop · selection pseudocode · signal catalog · question bank with `en`/`fa` · five scenarios · anti-patterns |
+| `docs/05-provider-delivery.md` | The inversion · resolution algorithm · three cases · ordering options · provider card · attribution · API |
+| `docs/06-action-plan.md` | Six workstreams broken to commit-sized tasks · gates · acceptance criteria · business decisions · risks |
+
+Every section ends with **acceptance criteria** and the **open decisions** it is blocked on.
 
 ---
 

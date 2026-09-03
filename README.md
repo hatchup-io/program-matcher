@@ -21,7 +21,13 @@ The proposal is organised around the five flows the system has to answer for, pl
 | Path | What it is |
 |---|---|
 | `deck/program-matcher.md` | The presentation (Marp). Internal engineering audience. |
-| `docs/ARCHITECTURE.md` | The spec behind the deck — pipelines, data model, action plan, open decisions. |
+| `docs/ARCHITECTURE.md` | The map — the spine, the rules, and where each detail lives. |
+| `docs/01-data-collection.md` | Source trust levels, the intake state machine, extraction-proposes/human-approves, the required-field contract. |
+| `docs/02-data-storage.md` | The three tiers, the section taxonomy, the pre-filtered retrieval query, sizing. |
+| `docs/03-data-update.md` | Revisions, the publish transaction, the drift scan, session pinning, staleness. |
+| `docs/04-client-questions.md` | The loop, the signal catalog, the question bank, and five end-to-end scenarios. |
+| `docs/05-provider-delivery.md` | The inversion, delivery resolution, the three cases, ordering, booking attribution. |
+| `docs/06-action-plan.md` | Six workstreams broken to commit-sized tasks, with gates and acceptance criteria. |
 
 ## The proposal in three sentences
 
