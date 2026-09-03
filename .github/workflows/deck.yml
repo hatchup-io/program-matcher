@@ -1,0 +1,71 @@
+name: Deck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# One in-flight deploy at a time; a superseded run is cancelled rather than
+# racing the one behind it onto the same URL.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Render deck
+        run: |
+          mkdir -p site
+          # The HTML deck IS the site root, so the Pages URL opens the
+          # presentation itself rather than a landing page in front of it.
+          npx --yes @marp-team/marp-cli@latest deck/program-matcher.md \
+            --html --allow-local-files -o site/index.html
+          npx --yes @marp-team/marp-cli@latest deck/program-matcher.md \
+            --pdf --pdf-outlines --allow-local-files -o site/program-matcher.pdf
+
+      # Reviewable on a PR, where there is no deployment to look at.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: program-matcher-deck
+          path: site/
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          path: site/
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            site/program-matcher.pdf --clobber --repo "$GITHUB_REPOSITORY"
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

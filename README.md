@@ -19,15 +19,19 @@ We give the session an explicit candidate set, select each question by the infor
 
 The program knowledge base — today static markdown that no runtime code reads — is chunked, embedded and stored in `pgvector` alongside the catalog, so the chat is anchored to real program facts from the second turn and every claim it makes carries a source.
 
-## Building the deck
+## The deck
 
-The deck is [Marp](https://marp.app) markdown. CI renders it to PDF and HTML on every push and attaches both to the workflow run; tagging a release attaches them to the release.
+Rendered from `deck/program-matcher.md` on every push to `main` and published to GitHub Pages:
+
+**https://hatchup-io.github.io/bayatgroup-program-matcher/**
+
+The same run produces `program-matcher.pdf` beside it, and attaches it to any published release. Pull requests build the deck too, and leave PDF + HTML on the run as the `program-matcher-deck` artifact — so a change is reviewable before it reaches the URL.
 
 Locally:
 
 ```bash
-npx @marp-team/marp-cli@latest deck/program-matcher.md --pdf --allow-local-files
-npx @marp-team/marp-cli@latest deck/program-matcher.md --html --allow-local-files
+npx @marp-team/marp-cli@latest deck/program-matcher.md --html --allow-local-files -o site/index.html
+npx @marp-team/marp-cli@latest deck/program-matcher.md --pdf --allow-local-files -o site/program-matcher.pdf
 ```
 
 Or preview live in VS Code with the Marp extension.

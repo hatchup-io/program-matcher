@@ -3,3 +3,5 @@ node_modules/
 *.pptx
 deck/*.html
 .DS_Store
+site/
+build/
