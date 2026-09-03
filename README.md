@@ -1,31 +1,43 @@
-# Bayat Group — Program Matcher
+# Program Matcher
 
-Design repository for a goal-directed chat that converges on a migration program, backed by a vector-indexed program catalog.
+Design proposal for a system that matches an applicant to a migration **program** — and only then to a provider who can deliver it.
 
-This repo holds the proposal, not the implementation. The system it describes is built in [`hatchup-io/bayatgroup-backend`](https://github.com/hatchup-io/bayatgroup-backend), under `apps/funnel_modules/bayat_group/` and `apps/programs/`. The design lives here so it can be reviewed and presented before any code is written.
+This repository holds the design, not the implementation. The system it describes is built in the platform backend, under the funnel-module and programs apps. The design lives here so it can be reviewed and presented before any code is written.
+
+## The five flows
+
+The proposal is organised around the five flows the system has to answer for, plus an action plan for each:
+
+| # | Flow | Question it answers |
+|---|---|---|
+| 1 | **Collection** | How does a program get into the catalog, and what stops a wrong one getting in? |
+| 2 | **Storage** | Where does program data live, and which tier is allowed to decide anything? |
+| 3 | **Update** | What happens when a program changes — including mid-conversation? |
+| 4 | **Client questions** | What do we ask, in what order, and when do we stop? |
+| 5 | **Provider delivery** | The program is matched — now who delivers it? |
 
 ## Contents
 
 | Path | What it is |
 |---|---|
 | `deck/program-matcher.md` | The presentation (Marp). Internal engineering audience. |
-| `docs/ARCHITECTURE.md` | The spec behind the deck — data model, loop, rollout, open questions. |
+| `docs/ARCHITECTURE.md` | The spec behind the deck — pipelines, data model, action plan, open decisions. |
 
 ## The proposal in three sentences
 
-The Bayat Group guided chat runs a fixed six-phase discovery plan and only ranks programs once the conversation is over, so it can take up to thirty-six turns to reach a shortlist that was decidable at turn eight.
+The matching conversation runs a fixed discovery script and only ranks programs once it is over, so it can spend thirty-odd turns reaching a shortlist that was settled at eight — nothing in the session knows which programs are still standing, so no question can be skipped for having stopped mattering.
 
-We give the session an explicit candidate set, select each question by the information it would gain over that set, and stop as soon as no remaining unknown can reorder the result.
+We give the session an explicit candidate set, select each question by what it would rule out, stop as soon as no remaining unknown can reorder the result, and back the whole thing with a program knowledge base that is collected through a review gate, stored in three tiers, and versioned so a decision stays explicable after the source changes.
 
-The program knowledge base — today static markdown that no runtime code reads — is chunked, embedded and stored in `pgvector` alongside the catalog, so the chat is anchored to real program facts from the second turn and every claim it makes carries a source.
+And the catalog is inverted: today programs are reached *through* a provider, which makes a well-fitting program invisible if nobody has been assigned to it — matching should end at a program, with providers resolved afterwards as the delivery layer.
 
 ## The deck
 
 Rendered from `deck/program-matcher.md` on every push to `main` and published to GitHub Pages:
 
-**https://hatchup-io.github.io/bayatgroup-program-matcher/**
+**https://hatchup-io.github.io/program-matcher/**
 
-The same run produces `program-matcher.pdf` beside it, and attaches it to any published release. Pull requests build the deck too, and leave PDF + HTML on the run as the `program-matcher-deck` artifact — so a change is reviewable before it reaches the URL.
+The same run produces `program-matcher.pdf` beside it, and attaches it to any published release. Pull requests build the deck too and leave PDF + HTML on the run as the `program-matcher-deck` artifact, so a slide change is reviewable before it reaches the URL.
 
 Locally:
 

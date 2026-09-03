@@ -1,93 +1,194 @@
 # Program Matcher — architecture
 
-> Status: proposal. Nothing here is built. The deck in `deck/program-matcher.md` is the summary; this file is the detail behind it.
+> Status: proposal, v2. Nothing here is built. The deck in `deck/program-matcher.md` is the summary; this file is the detail behind it.
 
-The implementation target is `hatchup-io/bayatgroup-backend`, in `apps/funnel_modules/bayat_group/` and `apps/programs/`. This repository holds the design so it can be reviewed before code exists, not because the system will live here.
+The subject of this design is the **program**. A provider is a delivery channel for a program that has already been matched, and a provider-scoped funnel is a filter on delivery — not a constraint on what can be matched. Where a specific deployment is named below it is an example of the shape, not the subject.
 
-## 1. What we are changing
+The implementation target is the platform backend, in the funnel-module and programs apps. This repository holds the design so it can be reviewed and presented before code exists.
 
-The Bayat Group guided chat runs a fixed six-phase discovery plan (`apps/funnel_modules/bayat_group/general_chat_phases.py`) on the shared phased-chat engine (`apps/funnel_modules/phased_chat.py`), with `ExploratoryCompletion(max_turns_per_phase=6)` as the completion policy. Programs are ranked only after the chat finishes, by `ranking.py`, against the applicant's stated optimization priorities.
+## 0. What v2 changed
 
-That design gathers a consultation. It does not converge on a program, and it cannot: the conversation carries no representation of which programs are still viable, so no turn can be skipped on the grounds that it no longer changes the answer.
+v1 was written from inside a single provider's funnel, and covered only data storage plus part of the question logic. The review asked for five flows and an action plan. v2 restructures around them: collection (§1), storage (§2), update (§3), client questions (§4), provider delivery (§5), with the action plan in §7.
 
-The change is to give the session an explicit candidate set, drive question selection from it, and back it with a retrievable index of the program knowledge base so the conversation can be grounded in real program facts from the second turn.
+## 1. Data collection
 
-## 2. Two layers, in dependency order
+### 1.1 Where the data comes from today
 
-### 2.1 Layer 1 — the retrievable catalog
+A developer reads a source document and hand-writes a seed YAML file; seventeen programs, one author each, no review step, and no record of which sentence in the source produced which number in the seed.
 
-The knowledge base already exists as markdown under `docs/bayatgroup-prgorams/{CBI,RBI,Immigration}/**` in the backend repo, alongside the structured `facts`, `requirements` and `objectives` blocks that the seeds in `apps/programs/seeds/*.yaml` load onto `MigrationProgram`. Nothing in the runtime reads the markdown today.
+That is workable while the team that built the engine also authors the catalog. It does not survive providers authoring their own programs, and it has no answer to the question that matters most in a regulated advisory product: *where did this threshold come from?*
 
-Ingestion chunks those documents **by section rather than by fixed window**, because the documents are already sectioned the way an advisor cites them — qualifying routes, physical presence, family inclusion, restricted nationalities, processing time, permanent residence and citizenship pathway. A fixed-window chunker would split a route's amount from its conditions, which is exactly the pair a wrong answer comes from.
+### 1.2 Three kinds of source, three levels of trust
 
-Each chunk carries `program_id`, `category`, `country_code`, `section_type`, `source_path`, `source_revision` and a `content_hash`. The metadata is what makes retrieval filterable, and pre-filtering on hard constraints is what stops the store from returning a top-k that a nationality ban already excluded.
+**Official** sources — the authority's own brief, the law, the regulation — carry the highest trust, change slowest, and are the hardest to parse. **Expert** sources — in-house methodology and advisory briefings — are trusted for weighting and judgement, never for legal fact. **Provider** sources — the one-pager from whoever sells the program — are useful and current, and carry a commercial interest, which makes them the ones to review hardest.
 
-Storage is `pgvector` in the existing PostgreSQL 18 cluster, with an HNSW index on the embedding column and a btree on `(program_id, section_type)`. Embeddings come from OpenAI `text-embedding-3-large` (3072 dims), through the same key handling as the agents — with the model name read from `AppSettings`, matching the existing rule that the model is a database value and the env var is only a fallback.
+### 1.3 The pipeline
 
-Freshness is enforced two ways: a `post_save` hook on `MigrationProgram` marks its chunks stale, and a `manage.py reindex_programs` command rebuilds by `content_hash` so an unchanged chunk is never re-embedded. A periodic consistency check belongs in `apps/notifications/beat_schedules.py` alongside the other scans — a chunk set that silently diverges from the catalog is a confidently wrong answer, which is worse than an error.
+A document enters with a mandatory provenance stamp: publisher, document date, language, and a URI or repository path. An extraction pass then proposes the structured block — facts, plans, eligibility parameters, objective ratings — and the narrative sections, with **every proposed field carrying the source span it was drawn from**.
 
-### 2.2 Layer 2 — the targeting loop
+Nothing is published by extraction. A human approves field by field, and approving is reading one sentence rather than re-reading the document. A program cannot publish while a required field is unapproved; the required set is the intake contract — category, outcome, authority, legal basis, cost floor, processing time, family inclusion, restricted nationalities, objective ratings.
 
-State on the chat session, next to the existing `signal_state`:
+**Silence is not permission.** A source that says nothing about restricted nationalities yields *unknown*, never *unrestricted*. The current seeds already state this rule in their own comments; intake makes it structural.
+
+### 1.4 Ownership
+
+The program owner registers sources and publishes revisions. A domain reviewer or consultant approves fields. The system only ever proposes. Providers self-author their own programs through the same gates, draft to publish, audited.
+
+The review surface is real panel UI. Per the platform rule, an operator action that exists only in Django admin is not finished.
+
+## 2. Data storage
+
+### 2.1 Three tiers
+
+**Tier 1, structured (relational).** Programs, plans, eligibility parameters, objective ratings. Typed and queryable, and the only tier an engine reads: eligibility and qualification compute here.
+
+**Tier 2, narrative (vector).** Source documents chunked by section — qualifying routes, physical presence, family inclusion, restricted nationalities, processing, citizenship pathway — embedded and indexed in `pgvector` with an HNSW index. The only tier the chat may quote from.
+
+**Tier 3, provenance.** Sources and revisions: document, publisher, date, hash, and the span each Tier-1 field was extracted from.
+
+The rule that keeps the tiers honest: **engines read Tier 1, language reads Tier 2, and both must resolve to Tier 3.**
+
+### 2.2 Chunking by section
+
+The documents are already sectioned the way an advisor cites them, and a section is the unit a claim is made from. A fixed-window chunker splits a route's amount from its conditions, and that pair — separated — is precisely how a confident wrong answer gets produced.
+
+### 2.3 Why pgvector rather than a dedicated vector database
+
+One store means a program revision and its chunks commit in the same transaction: no dual-write, no reconciliation job, and no state where the index still offers a route the catalog retired. Filters and vectors live in one query, so hard constraints pre-filter rather than post-filter a top-k that was already wrong. And nothing new joins the deployment — no extra service, no extra backup rotation, no new way for a deploy to fail.
+
+Revisit at roughly 10⁵ chunks, or as soon as a second service needs the same index.
+
+### 2.4 Honest sizing
+
+At today's catalog size, vector search is not what makes the chat converge — the question loop in §4 is, and it would work over a plain queryset. What retrieval buys is grounding, so every claim carries a source, and reach, so the same design still works at two hundred provider-authored programs.
+
+Both are worth building. Confusing which one solves which problem is how this ends up as a vector store bolted onto a chat that still wanders.
+
+## 3. Data update
+
+### 3.1 Revisions, not edits
+
+A published program is immutable. A change creates a new revision; publishing flips which revision is current, bounded by `effective_from` and `effective_until` — the same shape provider assignments already use.
+
+This buys three things in-place edits cannot. A decision stays explicable, because a card cites the revision it was produced from and stays correct after the threshold moves. Change is reviewable, because a revision diff is what the reviewer approves. And rollback is a pointer move rather than a restore.
+
+### 3.2 Keeping the index true
+
+Publishing a revision re-chunks it and re-embeds only the chunks whose content hash changed. A changed seed or document takes the same path, because a seed is a source like any other. `manage.py reindex_programs [--program slug] [--force]` covers manual repair, and a nightly consistency scan — alongside the existing periodic scans — asserts that every current revision has chunks, every chunk hash matches, and no orphans survive.
+
+A chunk set that has silently drifted from the catalog is worse than an error. An error is visible; drift answers confidently and wrongly.
+
+### 3.3 Change mid-session
+
+A session pins the revision it started on, and the conversation, the eligibility verdict and the shortlist all read that pinned revision through to the end. The next session gets the new one.
+
+Without pinning, an applicant can be told two different things about the same program inside one conversation, and the transcript will not explain why.
+
+### 3.4 Staleness
+
+Every program carries a review-due date. An overdue program is flagged in the panel and its card states *verified as of* the source date. It is not silently dropped from the shortlist: quietly shrinking the catalog is a worse failure than showing a date.
+
+## 4. Client questions
+
+### 4.1 The loop
+
+The session carries a candidate set — which programs are still standing, and why each excluded one was excluded — alongside the signals captured so far.
+
+Each turn: apply captured hard constraints as SQL predicates, recording every exclusion with a reason code and the turn number; retrieve over the surviving programs' chunks with a per-program cap so a long document cannot outvote a terse one; score the candidates through the existing eligibility and qualification engines, unchanged; select the next question by expected information gain; then test the stop conditions before generating anything.
 
 ```
-candidate_state = {
-  "surviving":  {slug: {"score": float, "verdict": str, "band": str}},
-  "excluded":   {slug: {"code": str, "turn": int}},
-  "asked":      [signal_key, ...],
-  "updated_at": iso8601,
-}
+gain(s) = H(C) − Σ P(v)·H(C | s=v)        ask argmax gain(s)·confidence(s)/cost(s)
 ```
 
-Per turn, in order:
+A question whose answer cannot reorder the candidate set has zero gain and is never asked. That single rule is what replaces a fixed script that runs to its turn budget whether or not the answer is already known.
 
-1. **Filter.** Captured hard constraints become SQL predicates — sanctioned nationality, contribution floor, dependent age limits. Exclusions are recorded with a reason code and the turn number, never dropped silently.
-2. **Retrieve.** The accumulated intent narrative is embedded and searched against the surviving programs' chunks. Per-program scores aggregate their chunk scores under a per-program cap, so a long document cannot outvote a terse one.
-3. **Score.** Candidates go through the existing `resolve_eligibility()` and the qualification scorer unchanged. Their verdicts are the authority; retrieval only decides who gets scored.
-4. **Select.** The next question is the unanswered signal with the highest expected information gain over the candidate set, discounted by how expensive that question is to ask.
-5. **Stop.** The stop conditions are tested before another question is generated.
+Stop conditions: dominance (the leader's margin exceeds what any remaining unknown can close), stability (top-k unchanged for *n* turns with only non-discriminative signals open), exhaustion (no positive-gain signal remains), empty (nothing survives the hard gates — presented honestly and routed to a consultant), and a hard turn ceiling as a backstop rather than as the mechanism.
 
-Question selection scores each unanswered signal `s` by the entropy reduction its answer would produce over the candidate set, weighted by extraction confidence and divided by a per-signal cost — a passport question is cheap, a source-of-funds question is expensive and is asked late or only when decisive. A signal whose answer cannot reorder the surviving set has zero gain and is never asked, which is the mechanism that removes the wandering.
+### 4.2 Signal cost
 
-The existing phase plan survives as the cold-start ordering and as the fallback when retrieval returns nothing. It stops being the thing that decides when the chat ends.
+Cost is not difficulty; it is what the question costs the applicant. Nationality and primary objective are cheap. Budget band is moderate. Source of funds is expensive, rarely splits the candidate set, and is therefore asked late or only when it is decisive. The initial ordering comes from the sequence the current phase plans already encode — work and business before money, family after — and is checked against the shadow run.
 
-Stop conditions: **dominance** (the leader's margin exceeds what any remaining unknown can close), **stability** (top-k unchanged for *n* turns with only non-discriminative signals open), **exhaustion** (no positive-gain signal remains), **empty** (nothing survives the hard gates — the existing `NOT_ELIGIBLE` path, presented honestly and routed to a consultant), and a **hard turn ceiling** kept as a backstop rather than as the mechanism.
+### 4.3 Scenarios
 
-Whatever the verdict still needs but the loop never asked is collected by the roadmap's gathered-data form, which already prefills from `writeback_general_objectives()`.
+**Clean convergence.** Objective, nationality, budget, family, timeline — five turns, two survivors presented with citations and the margin between them. Whatever the file still needs is collected by the roadmap form rather than by the chat.
 
-## 3. What stays deterministic
+**Hard block.** When a restricted-nationality gate closes most of the surviving set, the loop stops interviewing: it names what is closed and why, presents whatever survives, and routes to a consultant if nothing does. A mitigation probe is raised immediately rather than saved for the end — asking eight more questions before delivering bad news is the worst version of this conversation.
 
-Unchanged, and restated because retrieval invites the opposite: the model runs the conversation, extracts signals, phrases the selected question, and presents the result in the category voice from `voice.py`. It does not choose the candidate set, score eligibility, compute qualification, order the shortlist, or assert a program fact that is not in a retrieved chunk.
+**Contradiction.** When a later answer contradicts an earlier one, the loop reopens the affected signal instead of averaging the two, and asks one disambiguating question that names both answers. If it stays ambiguous, both readings stay in the candidate set and the shortlist ships with a near-miss tier rather than a false confidence.
 
-Grounding is enforced at the prompt boundary. The turn prompt receives the retrieved chunks for surviving candidates and no other program content, and the guardrail pass in `guardrails.py` is extended to flag a program claim with no supporting chunk, the same way it already screens input. The shortlist card from `presenter.present_shortlist()` gains a `sources` block carrying document path and section, so a consultant reading a transcript can verify a threshold against Bayat Group's own file.
+Across all three: never re-ask what is already known or derivable. A family total that is fully accounted for closes the dependent questions; a stated purpose that is a permanent move answers the intent question.
 
-## 4. Why pgvector rather than a dedicated vector database
+### 4.4 The model boundary
 
-One store means a program row and its chunks commit in the same transaction, so there is no dual-write and no reconciliation job. Filters and vectors live in one query, so hard constraints pre-filter instead of post-filtering a top-k that was already wrong. And nothing new joins the swarm — no extra service, no extra backup rotation, no extra way for a deploy to fail.
+The model runs the conversation, extracts signals, phrases the selected question, and presents the result in the right voice for the category. It does not choose the candidate set, score eligibility, compute qualification, order the shortlist, or assert a program fact that is not in a retrieved chunk.
 
-At seventeen programs and a few thousand chunks, a dedicated vector database buys latency we do not need at a cost in operational surface we would feel on the next deploy. The decision is worth revisiting at roughly 10⁵ chunks, or as soon as a second service needs the same index.
+Grounding is enforced at the prompt boundary: the turn prompt receives the retrieved chunks for surviving candidates and no other program content, and the guardrail pass flags a program claim with no supporting chunk the same way it already screens input. The shortlist card carries a sources block — document and section — so a consultant reading a transcript can verify a number against the original file.
 
-## 5. The honest framing
+## 5. Provider delivery
 
-Vector search is not what makes the chat converge. With seventeen programs the ranker could enumerate the catalog on every turn; the information-gain loop is what ends the wandering, and it would work over a plain queryset.
+### 5.1 The inversion
 
-What retrieval buys is grounding and reach: it puts Bayat Group's expert knowledge base into the conversation, cited and per-program, and it keeps working when the catalog is two hundred programs authored by providers through the Phase 7 self-service described in `docs/internal-modules/BG_MULTI_PROGRAM_STRATEGIC_FUNNEL.md`.
+Today the catalog is reached through a provider: a funnel resolves to its exclusive provider, and the programs shown are that provider's currently-effective assignments. Matching therefore happens inside one provider's inventory, and a program nobody has assigned is invisible however well it fits.
 
-Both are worth building. Confusing which one solves which problem is how this ends up as a vector store bolted to a chat that still wanders.
+Program-first reverses the order. The applicant is matched to a program; the delivery layer then resolves which providers hold a currently-effective assignment for it, presents them, and carries the choice into a booking. A provider-scoped funnel filters that layer rather than deciding what could be matched. This is a real change to the catalog service, not a rewording.
 
-## 6. Rollout
+### 5.2 The three cases
 
-**Phase 0 — Index.** `pgvector` extension, `ProgramChunk` model and migration, ingestion command, reindex on save. No runtime consumer, so it is purely additive.
+**One exclusive provider.** No choice is presented, because there is none. The card says so plainly instead of implying that a shortlist of one was a selection.
 
-**Phase 1 — Shadow.** The loop runs alongside the live chat and logs the shortlist it would have produced, against what the current ranker actually produced. Nothing user-visible. This is the phase that decides whether the rest is worth finishing.
+**Several providers.** The ordering rule must be explicit and auditable rather than whatever the queryset happened to return. Candidate inputs are rating, capacity, response time and commercial terms; the choice is a business decision, listed in §8.
 
-**Phase 2 — Guided flow.** The targeting loop drives the guided chat behind a funnel flag, with the phase plan as fallback. Contained and reversible.
+**No provider.** The program is still shown, marked as not currently deliverable, and routed to a consultant. Hiding a program because nobody has been assigned to it is exactly the silent failure the provider-first catalog has by construction.
 
-**Phase 3 — Grounding.** Retrieved chunks and citations reach the program-locked chat and the shortlist card.
+### 5.3 Booking attribution
 
-## 7. Evaluation
+A booking already stamps program, plan and assignment. What changes is where they come from: the matched program, rather than the funnel's exclusive provider — which also removes the current restriction that attribution only fills in for exclusive funnels holding a single-candidate card.
 
-Roughly fifty applicant profiles labelled by a consultant with the program they should reach, run as a harness in Phase 1 before anything is user-facing.
+## 6. What we build
+
+```python
+class ProgramSource(TimeStampedModel):        # tier 3
+    publisher, document_date, kind, uri, content_hash
+
+class ProgramRevision(TimeStampedModel):      # tier 3
+    program, source, status(draft|published), effective_from, effective_until
+    approved_fields   # per-field approval + the source span it came from
+
+class ProgramChunk(TimeStampedModel):         # tier 2
+    revision, section_type, content, content_hash, embedding(3072)
+    # HNSW on embedding; btree on (revision_id, section_type)
+```
+
+On the chat session, alongside the existing signal state: `pinned_revision`, the revision the session reads to the end; and `candidate_state`, the surviving programs with their scores plus every exclusion with its reason code and turn number. The latter is the audit trail for *why this shortlist*, and the thing that makes the loop debuggable from the operator panel.
+
+## 7. Action plan
+
+| # | Workstream | Depends on | Size | Output |
+|---|---|---|---|---|
+| W1 | Storage tiers: revisions, sources, chunks, `pgvector` | — | 1.5 wk | Migrations + reindex command |
+| W2 | Collection: intake, extraction proposal, review panel | W1 | 2.5 wk | A program authored and approved end to end |
+| W3 | Update: publish/rollback, drift scan, session pinning | W1 | 1 wk | Index provably matches the catalog |
+| W4 | Question loop: candidate state, signal catalog, gain selection | W1 | 2 wk | Behind a flag, shadow first |
+| W5 | Delivery layer: program → providers → booking attribution | — | 1.5 wk | Catalog service inverted |
+| W6 | Evaluation harness + golden set | W4 | 1 wk | The numbers that decide whether W4 ships |
+
+W1 runs first and alone. W2, W3 and W4 then run in parallel. **W5 depends on nothing here and can start immediately** — it is the change that makes the system program-first, and it is the cheapest item on the list.
+
+There are two decision points rather than one deploy. At the end of week 3: does the intake gate hold when a real program goes through it? At the end of week 6: does the loop beat the current ranker on the golden set? Nothing user-facing ships before the second.
+
+## 8. Decisions needed, and open risks
+
+**Provider ordering** for a non-exclusive program — rating, capacity, response time, or commercial terms. The rule has to be stated by the business rather than emerge from a queryset.
+
+**Field approval ownership** at intake — an internal domain reviewer, or the provider for their own programs with an internal spot-check.
+
+**Consultant time for the golden set** — roughly fifty labelled profiles.
+
+**Review cadence** — how stale a source may be before its program is flagged.
+
+Open risks: extraction quality at intake, mitigated by per-field approval and measured by the approval-edit rate; retrieval bias toward verbose documents, capped per program and verified in shadow; over-pruning a program a consultant would have kept, mitigated by reason codes on every exclusion and a near-miss tier on the shortlist.
+
+## 9. Evaluation
 
 | Metric | Baseline | Target |
 |---|---|---|
@@ -95,12 +196,5 @@ Roughly fifty applicant profiles labelled by a consultant with the program they 
 | Top-1 agreement with consultant label | measure in shadow | ≥ 0.8 |
 | Top-3 agreement | measure in shadow | ≥ 0.95 |
 | Non-discriminative turns per session | measure in shadow | ≤ 1 |
-| Unsourced program claims | unmeasured | 0 |
-
-## 8. Open questions
-
-Does the program-locked (self-select) flow adopt the loop, or only the grounding? The proposal is grounding only — its target is already chosen, so there is no candidate set to reduce.
-
-Does the shortlist ever return a single program, or always show the runners-up? The proposal is to always show them with the margin stated, because a shortlist of one reads as a sale rather than as advice.
-
-How is the per-signal cost calibrated? Initially by hand, from the ordering the phase plans already encode — work and business before money, family after — with the shadow run as the check.
+| Program claims with no source | unmeasured | 0 |
+| Index-vs-catalog drift | unmeasured | 0 |
