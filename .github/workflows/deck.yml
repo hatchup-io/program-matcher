@@ -19,15 +19,25 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Never run a fork's pull request on our own runner: that is arbitrary code
+    # on our machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
+      # The PDF is printed by headless Chrome, which the hosted image had and
+      # our runner does not. Marp finds it through CHROME_PATH.
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+
       - name: Render deck
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           mkdir -p site
           # The HTML deck IS the site root, so the Pages URL opens the
@@ -59,7 +69,7 @@ jobs:
   deploy:
     needs: build
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       pages: write
       id-token: write
