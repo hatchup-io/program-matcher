@@ -19,22 +19,28 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Never run a fork's pull request on our own runner: that is arbitrary code
+    # on our machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-
+      # Marp's own image: the PDF is printed by headless Chromium, whose system
+      # libraries the hosted image had and our runner does not (installing
+      # them needs root). MARP_USER keeps the output owned by the runner user.
       - name: Render deck
         run: |
           mkdir -p site
+          marp() {
+            docker run --rm -v "$PWD:/home/marp/app" \
+              -e MARP_USER="$(id -u):$(id -g)" marpteam/marp-cli:latest "$@"
+          }
           # The HTML deck IS the site root, so the Pages URL opens the
           # presentation itself rather than a landing page in front of it.
-          npx --yes @marp-team/marp-cli@latest deck/program-matcher.md \
+          marp deck/program-matcher.md \
             --html --allow-local-files -o site/index.html
-          npx --yes @marp-team/marp-cli@latest deck/program-matcher.md \
+          marp deck/program-matcher.md \
             --pdf --pdf-outlines --allow-local-files -o site/program-matcher.pdf
 
       # Reviewable on a PR, where there is no deployment to look at.
@@ -59,7 +65,7 @@ jobs:
   deploy:
     needs: build
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       pages: write
       id-token: write
